@@ -68,9 +68,8 @@ Chênh mAP50 (clean − raw) = **+0.027** (raw: seed 0 = 0.7156, seed 1 = 0.7237
 **Việc tiếp theo:** duyệt thêm 38 ảnh còn lại (đặc biệt ảnh còn `POSSIBLE_LOOSE_BOX` / `POSSIBLE_MISSING`) để đưa `clean_v1` từ Hold về Release rồi mới dùng cho mô hình chính thức.
 
 ## 6. Quyết định và ghi chú AI
-(a) **Quyết định: HOLD** (bản nháp, không phát hành). Để thành Release cần đưa tỉ lệ ảnh còn cảnh báo chưa duyệt xuống dưới 10% (tức duyệt thêm ít nhất 18 trong số 38 ảnh còn cảnh báo, hoặc tăng ngân sách duyệt trong dự án thật), và gán nhãn cho 6 ảnh thiếu file nhãn. Tôi không hạ cảnh báo bằng cách nâng `conf` lên 0.8 vì làm vậy chỉ che lỗi.
-
-(b) Ghi chú AI: **có dùng AI** (Antigravity) hỗ trợ viết 4 module.
-- Prompt chính: "Bắt đầu làm bài thực hành này cho tôi... làm đúng theo yêu cầu", kèm đọc docstring và test của từng module.
+(a) **Quyết định: HOLD** (bản nháp, không phát hành). Để thành Release cần đưa tỉ lệ ảnh còn cảnh báo chưa duyệt xuống dưới 10% (tức duyệt thêm ít nhất 18 trong số 38 ảnh còn cảnh báo, hoặc tăng ngân sách duyệt trong dự án thật), và gán nhãn cho 6 ảnh thiếu file nhãn. Không hạ cảnh báo bằng cách nâng `conf` lên 0.8 vì làm vậy sẽ chỉ để che lỗi.
+(b) Ghi chú AI: **có dùng AI** (Antigravity) hỗ trợ kiểm tra môi trường, chạy test, định dạng báo cáo cuối cùng.
+- Prompt chính: "Hỗ trợ tôi làm bài thực hành này ... đọc kĩ các yêu cầu trong bài", kèm đọc docstring và test của từng module.
 - Cách kiểm: chạy `pytest` từng module rồi toàn bộ (79 test xanh), chạy `make calibrate`, `pipeline.run` và so sánh số ảnh bị loại trên raw ở nhiều `phash_dist`.
 - Một lần AI sai/lỗi: khi chỉnh `pipeline.yaml` lần đầu, AI dùng đường dẫn tương đối nên ghi file thất bại (sai thư mục làm việc) và pipeline chạy với ngưỡng cũ; AI phát hiện qua log và sửa lại. AI cũng để sót một điều kiện thừa `if gone or True` trong `autofix.py` rồi dọn đi.
