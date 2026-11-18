@@ -44,7 +44,28 @@ Số liệu từ `submission/calibration/calibration_report.md` (calib 39 ảnh)
 4. Lỗi nhầm lớp mà cả model lớn cũng nhầm (xe tải ↔ bus) sẽ không được cờ vì hai bên đồng ý với nhau; mục này là suy luận, chưa kiểm chứng trên dữ liệu.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-Chưa chạy (phần tùy chọn). Bản nháp `submission/export/clean_v1/` đã sẵn sàng để train sau.
+Chạy cục bộ trên GPU **NVIDIA GeForce RTX 4050 Laptop GPU** (`scripts/train_compare.py`, `yolo26n.pt`, `epochs=20`, `imgsz=640`, `batch=16`, `seeds=[0, 1]`, cùng `val=gold_val` 40 ảnh và `test=test` 100 ảnh). Số ảnh train: `raw` 224 ảnh (218 file nhãn) vs `clean` (`clean_v1` ở trạng thái Hold) 202 ảnh.
+
+Bảng từ `submission/results/comparison.md`:
+
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---|---|---|---|---|---|
+| raw | 224 | 2 | 0.720 ± 0.006 | 0.517 ± 0.001 | 0.754 ± 0.027 | 0.640 ± 0.035 |
+| clean | 202 | 2 | 0.747 ± 0.007 | 0.515 ± 0.004 | 0.824 ± 0.056 | 0.648 ± 0.036 |
+
+Chênh mAP50 (clean − raw) = **+0.027** (raw: seed 0 = 0.7156, seed 1 = 0.7237; clean: seed 0 = 0.7419, seed 1 = 0.7520).
+
+**So sánh với độ nhiễu giữa các seed và kết luận trung thực:**
+- Với **mAP50**, chênh lệch **+0.027** lớn hơn độ lệch chuẩn giữa 2 seed (~0.006–0.007, khoảng giá trị hai bên không chồng lấn). **Precision** tăng **+0.070** (0.824 ± 0.056 vs 0.754 ± 0.027), nhưng độ lệch ở `clean` khá lớn (±0.056).
+- Ngược lại, **mAP50-95** gần như không đổi (**−0.002**, 0.515 ± 0.004 vs 0.517 ± 0.001) và **Recall** (**+0.008**, 0.648 ± 0.036 vs 0.640 ± 0.035) nhỏ hơn nhiều so với độ lệch giữa các seed (±0.035–0.036) nên hoàn toàn nằm trong nhiễu.
+- **Kết luận trung thực:** Với chỉ 2 seed và tập test 100 ảnh, chưa đủ cơ sở kết luận `clean` tốt hơn toàn diện; mới thấy tín hiệu cải thiện ở mAP50 (+0.027) và Precision (+0.070), còn độ khít box (mAP50-95) và Recall chưa khác biệt ngoài nhiễu.
+
+**Giả thuyết giải thích và cách kiểm:**
+1. **Box lỏng còn sót trong bản nháp Hold kéo mAP50-95 không tăng:** `clean_v1` vẫn còn 38/202 ảnh cảnh báo chưa duyệt và `POSSIBLE_LOOSE_BOX` có recall thấp (0.20 ở `conf=0.6`). Nhờ loại được lỗi cú pháp/thiếu file nhãn, mAP50 tăng nhưng box hơi lệch vẫn ảnh hưởng IoU cao (0.50–0.95). *Cách kiểm:* chạy thêm biến thể `oracle` (nhãn sạch hoàn toàn) hoặc tăng ngân sách duyệt trong thư mục thử nghiệm `work/` để đo riêng mức tăng mAP50-95 khi sửa hết box lỏng.
+2. **Tập `raw` chứa 6 ảnh thiếu nhãn, lỗi cú pháp và 5 ảnh `LEAK_TEST`:** 6 ảnh không có `.txt` bị coi là ảnh nền khi train làm phạt model (giảm Precision ở `raw`), trong khi 5 ảnh trùng test/val có thể làm lệch đánh giá. *Cách kiểm:* kiểm tra trong `01_intake.csv` xem 5 ảnh `LEAK_TEST` trùng với `test/` hay `gold_val/`, và chạy thêm biến thể `auto` (`--budget 0 --drop-unlabeled`) để tách riêng phần đóng góp của máy vs người duyệt.
+3. **Nhiễu do cỡ mẫu nhỏ (test 100 ảnh, 2 seed):** AP50 lớp `truck` trên `raw` dao động mạnh giữa seed 0 (0.7139) và seed 1 (0.5747). *Cách kiểm:* train thêm 3–5 seed (`--seeds 0 1 2 3 4`) và 40 epoch để kiểm tra độ ổn định của chênh lệch mAP50.
+
+**Việc tiếp theo:** duyệt thêm 38 ảnh còn lại (đặc biệt ảnh còn `POSSIBLE_LOOSE_BOX` / `POSSIBLE_MISSING`) để đưa `clean_v1` từ Hold về Release rồi mới dùng cho mô hình chính thức.
 
 ## 6. Quyết định và ghi chú AI
 (a) **Quyết định: HOLD** (bản nháp, không phát hành). Để thành Release cần đưa tỉ lệ ảnh còn cảnh báo chưa duyệt xuống dưới 10% (tức duyệt thêm ít nhất 18 trong số 38 ảnh còn cảnh báo, hoặc tăng ngân sách duyệt trong dự án thật), và gán nhãn cho 6 ảnh thiếu file nhãn. Tôi không hạ cảnh báo bằng cách nâng `conf` lên 0.8 vì làm vậy chỉ che lỗi.
