@@ -1,4 +1,4 @@
-"""BƯỚC 4 — Cửa chặn: quyết định Release / Hold / Rework.   ★
+﻿"""BƯỚC 4 — Cửa chặn: quyết định Release / Hold / Rework.   ★
 
 Test:  pytest tests/test_gate.py -q
 
@@ -20,5 +20,21 @@ from ..common import ERROR, WARN  # noqa: F401
 
 
 def decide(issues, image_stems, cfg, reviewed=frozenset()):
-    # TODO
-    raise NotImplementedError("gate chưa làm")
+    stems = set(image_stems)
+    n_images = len(stems)
+    n_errors = sum(1 for i in issues if i.severity == ERROR)          # lỗi bắt buộc: không bao giờ được bỏ qua
+    warn_images = {i.image for i in issues if i.severity == WARN and i.image in stems and i.image not in reviewed}
+    n_warn = len(warn_images)
+    ratio = round(n_warn / n_images, 4) if n_images else 0
+    limit = cfg["gate"]["warn_ratio_hold"]
+
+    if n_errors > 0:
+        decision = "Rework"
+        reasons = [f"còn {n_errors} lỗi bắt buộc chưa xử lý -> không được phát hành"]
+    elif n_images and n_warn / n_images >= limit:
+        decision = "Hold"
+        reasons = [f"{n_warn}/{n_images} ảnh ({ratio:.2%}) còn cảnh báo chưa được người duyệt, >= ngưỡng {limit:.0%}"]
+    else:
+        decision = "Release"
+        reasons = [f"không còn lỗi bắt buộc; {n_warn}/{n_images} ảnh ({ratio:.2%}) còn cảnh báo, dưới ngưỡng {limit:.0%}"]
+    return dict(decision=decision, n_errors=n_errors, n_warn_images=n_warn, n_images=n_images, warn_ratio=ratio, reasons=reasons)

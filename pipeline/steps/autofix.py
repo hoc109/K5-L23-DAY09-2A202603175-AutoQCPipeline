@@ -1,4 +1,4 @@
-"""BƯỚC 2/4 — Sửa tự động những lỗi bắt buộc mà máy sửa được AN TOÀN.   ★★
+﻿"""BƯỚC 2/4 — Sửa tự động những lỗi bắt buộc mà máy sửa được AN TOÀN.   ★★
 
 Test:  pytest tests/test_autofix.py -q
 
@@ -34,6 +34,91 @@ import yaml  # noqa: F401
 from ..common import ERROR, parse_yolo_line  # noqa: F401
 
 
+DROP_CODES = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+REMOVE_CODES = {"DUP_IMAGE_EXACT", "DUP_IMAGE_NEAR", "LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+
+
+def _fmt(v):
+    return f"{v:.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def _clip(cid, cx, cy, w, h):
+    """Cắt box về [0,1]; trả về None nếu sau khi cắt không còn diện tích."""
+    x1, x2 = max(0.0, cx - w / 2), min(1.0, cx + w / 2)
+    y1, y2 = max(0.0, cy - h / 2), min(1.0, cy + h / 2)
+    if x2 - x1 <= 0 or y2 - y1 <= 0:
+        return None
+    return f"{cid} {_fmt((x1 + x2) / 2)} {_fmt((y1 + y2) / 2)} {_fmt(x2 - x1)} {_fmt(y2 - y1)}"
+
+
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    fixes = []
+    errors = [i for i in issues if i.severity == ERROR]            # cảnh báo là việc của người, không đụng tới
+
+    # 1) xoá ảnh trước; mọi issue còn lại của ảnh đã xoá bị bỏ qua êm
+    removed = set()
+    for i in sorted((i for i in errors if i.code in REMOVE_CODES), key=lambda i: i.image):
+        if i.image in removed:
+            continue
+        removed.add(i.image)
+        gone = []
+        for p in ds.images_dir.glob(i.image + ".*") if ds.images_dir.exists() else []:
+            if p.stem == i.image:
+                p.unlink()
+                gone.append(p.name)
+        lp = ds.label_path(i.image)
+        if lp.exists():
+            lp.unlink()
+        fixes.append(dict(image=i.image, line=None, action="remove_image", before=f"{i.code}: " + (", ".join(gone) or i.image), after="(đã xoá ảnh + nhãn)"))
+
+    # 2) lỗi theo dòng: gom theo file, ghi lại MỘT lần, dùng số dòng gốc
+    per_file = defaultdict(lambda: defaultdict(set))                 # stem -> line -> {code}
+    for i in errors:
+        if i.image in removed or i.line is None:
+            continue
+        if i.code in DROP_CODES or i.code == "BOX_OUT_OF_IMAGE":
+            per_file[i.image][i.line].add(i.code)
+    for stem in sorted(per_file):
+        lp = ds.label_path(stem)
+        if not lp.exists():
+            continue
+        raw_lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+        out = list(raw_lines)
+        drop = set()
+        for ln in sorted(per_file[stem]):
+            if not 1 <= ln <= len(raw_lines):
+                continue
+            codes = per_file[stem][ln]
+            text = raw_lines[ln - 1]
+            if codes & DROP_CODES:                                   # dòng thắng: xoá, không clip thêm
+                drop.add(ln)
+                fixes.append(dict(image=stem, line=ln, action="drop_line", before=text, after="(đã xoá dòng)"))
+                continue
+            try:
+                new = _clip(*parse_yolo_line(text))
+            except ValueError:
+                new = None
+            if new is None:
+                drop.add(ln)
+                fixes.append(dict(image=stem, line=ln, action="drop_line", before=text, after="(đã xoá dòng: box nằm ngoài ảnh)"))
+            else:
+                out[ln - 1] = new
+                fixes.append(dict(image=stem, line=ln, action="clip_box", before=text, after=new))
+        keep = [t for k, t in enumerate(out, 1) if k not in drop]
+        with open(lp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("".join(t + "\n" for t in keep))
+
+    # 3) ảnh chưa có nhãn: máy không bịa nhãn
+    for stem in sorted({i.image for i in errors if i.code == "MISSING_LABEL_FILE" and i.image not in removed}):
+        fixes.append(dict(image=stem, line=None, action="needs_label", before="(không có file)", after="chuyển người gán"))
+
+    # 4) tên lớp trong data.yaml
+    if any(i.code == "BAD_CLASS_NAME" for i in errors) and ds.yaml_path.exists():
+        d = yaml.safe_load(ds.yaml_path.read_text(encoding="utf-8")) or {}
+        before = d.get("names")
+        d["names"] = {k: n for k, n in enumerate(cfg["classes"])}
+        with open(ds.yaml_path, "w", encoding="utf-8", newline="\n") as f:
+            yaml.safe_dump(d, f, allow_unicode=True, sort_keys=False)
+        fixes.append(dict(image="data.yaml", line=None, action="rename_classes", before=str(before), after=str(list(cfg["classes"]))))
+    return fixes
+
