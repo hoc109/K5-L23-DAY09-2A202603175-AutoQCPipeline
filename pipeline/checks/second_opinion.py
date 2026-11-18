@@ -1,4 +1,4 @@
-"""CHECK 6 — Ý kiến thứ hai: so nhãn với một model LỚN HƠN (yolo26l).   ★★★ (khó nhất, đáng điểm nhất)
+﻿"""CHECK 6 — Ý kiến thứ hai: so nhãn với một model LỚN HƠN (yolo26l).   ★★★ (khó nhất, đáng điểm nhất)
 
 Test:  pytest tests/test_second_opinion.py -q
 
@@ -39,6 +39,64 @@ from ..common import WARN, Issue, iou_xywh, parse_yolo_line  # noqa: F401
 from ..model_cache import get_preds  # noqa: F401
 
 
+def _valid_lines(ds, stem):
+    """[(số dòng gốc, (id, cx, cy, w, h))] của các dòng parse được và có id lớp hợp lệ."""
+    out = []
+    for ln_no, text in ds.read_label_lines(stem) or []:
+        try:
+            b = parse_yolo_line(text)
+        except ValueError:
+            continue
+        if 0 <= b[0] < len(ds.classes):
+            out.append((ln_no, b))
+    return out
+
+
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    c = cfg["second_opinion"]
+    conf_min, min_area, fp_conf = c["conf"], c["min_area_px"], c["fp_conf"]
+    iou_missing, iou_match, iou_loose = c["iou_missing"], c["iou_match"], c["iou_loose"]
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    issues = []
+    for p in ds.image_files():
+        stem = p.stem
+        if stem not in preds or ds.read_label_lines(stem) is None:
+            continue
+        size = ds.image_size(stem)
+        if not size:
+            continue
+        W, H = size
+        labels = _valid_lines(ds, stem)
+        all_preds = preds[stem]
+
+        for cls, conf, cx, cy, w, h in all_preds:
+            if conf < conf_min or (w * W) * (h * H) < min_area:
+                continue
+            r = (cx, cy, w, h)
+            cands = [(iou_xywh(r, b[1:]), b[0]) for _, b in labels]
+            cands = [(iou, lc) for iou, lc in cands if iou >= iou_missing]
+            if not cands:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                                    f"model thấy lớp {cls} (conf {conf:.2f}) nhưng nhãn không có box", extra={"conf": conf}))
+                continue
+            same = [iou for iou, lc in cands if lc == cls]
+            if same:
+                best = max(same)
+                if best < iou_loose:
+                    issues.append(Issue("second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                                        f"đúng vật (lớp {cls}) nhưng IoU chỉ {best:.2f} < {iou_loose}", extra={"conf": conf, "iou": round(best, 3)}))
+                continue
+            best_iou, best_cls = max(cands)
+            if best_iou >= iou_match:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                                    f"nhãn lớp {best_cls} nhưng model thấy lớp {cls} (conf {conf:.2f}, IoU {best_iou:.2f})",
+                                    extra={"conf": conf, "iou": round(best_iou, 3)}))
+
+        ref = [(pr[2], pr[3], pr[4], pr[5]) for pr in all_preds if pr[1] >= fp_conf]     # không lọc diện tích
+        for ln_no, b in labels:
+            if all(iou_xywh(b[1:], r) < iou_missing for r in ref):
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                                    f"box nhãn lớp {b[0]} không khớp vật nào model thấy (conf >= {fp_conf})", line=ln_no))
+    return issues
